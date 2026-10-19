@@ -1,0 +1,26 @@
+{
+  "name": "supaforge-bridge",
+  "version": "0.1.0",
+  "description": "a local bridge for developing on InsForge while continuously mirroring to Supabase, so migration day is a config flip instead of a copy-paste marathon.",
+  "type": "module",
+  "bin": {
+    "supaforge-bridge": "src/cli.js"
+  },
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/cli.js start",
+    "test": "node src/selftest.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "insforge",
+    "supabase",
+    "bridge",
+    "migration",
+    "postgrest",
+    "postgres"
+  ],
+  "license": "MIT"
+}
