@@ -1,13 +1,22 @@
 # supaforge-bridge
 
-develop on insforge. ship on supabase. cutover without copy-paste.
+develop on insforge, ship on supabase. the agent stays autonomous, production stays trusted, and nobody copy-pastes sql between dashboards.
 
-supaforge-bridge is a zero-dependency local proxy you put between your coding
-agent (insforge cli / mcp / sdk) and insforge. it forwards every request to
-insforge untouched — and in the background, mirrors every state-changing
-operation to a supabase project, continuously. when migration day comes,
-supabase is already in sync. no mid-build copy-paste sessions, no "run this
-sql in the supabase sql editor for me" loops.
+## the problem case
+
+two backends, two strengths, one tension.
+
+supabase is what you trust for production. it's battle-tested: years of hardening, a huge user base, managed postgres you'd happily bet a real product on. but it assumes a human in the loop. schema changes happen through the sql editor or dashboard, settings and keys live in the console, and in practice agentic development keeps ending with "now go run this in supabase yourself." the agent can write the migration, but you are the one who carries it over.
+
+insforge is what your agent can actually run. it's built for agentic coding: an mcp server and a cli expose the whole backend, so the agent creates tables, applies migrations, manages storage and auth, all on its own, with no human in the loop during the build. but it's young. you feel it. you don't want to bet production on it yet.
+
+so the tension is this: autonomous development needs the agent to own the backend. production trust needs supabase. and moving between them mid-project means a human becomes the bridge: copy the sql out of insforge, paste it into the supabase sql editor, verify, repeat. every migration, every table, every bucket, every time. the agent stops and waits. you do chores. this is the exact loop supaforge-bridge deletes.
+
+the bridge is that human, automated away. you develop entirely on insforge, where the agent works autonomously. the bridge sits in the middle, forwards everything to insforge, and in the background replays every state-changing operation to your supabase project: data writes, migration sql, storage, users. supabase stays continuously in sync without you touching its dashboard once during the build. when it's time to ship, the production database is already ready, because it has been ready the whole time. cutover is a flip, not a project.
+
+best of both worlds isn't a side effect, it's the design: insforge for the build, where autonomy lives. supabase for production, where trust lives. supaforge-bridge for the space between.
+
+## how it works
 
 ```
                      ┌──────────────────────┐
@@ -17,17 +26,15 @@ sql in the supabase sql editor for me" loops.
                      └──────────────────────┘
 ```
 
-the full endpoint-by-endpoint translation map lives in
-[docs/mapping.md](docs/mapping.md).
-
-## why this works
-
 insforge's data api is postgrest v12 behind `/api/database/records/{table}`;
 supabase's `/rest/v1/{table}` is postgrest too. so data writes translate with
-the query string and body passed through nearly unchanged — only the path
+the query string and body passed through nearly unchanged, only the path
 shape and auth headers change. schema changes arrive as sql (insforge
 migrations / `db query`), and the bridge replays that sql to supabase through
 the supabase management api. no postgres wire protocol, no drivers, no deps.
+
+the full endpoint-by-endpoint translation map lives in
+[docs/mapping.md](docs/mapping.md).
 
 ## what gets mirrored
 
@@ -40,14 +47,14 @@ the supabase management api. no postgres wire protocol, no drivers, no deps.
 | presigned-s3 upload confirmed (`/confirm-upload`) | bridge pulls the object from insforge, pushes it to supabase |
 | `POST /api/auth/users` with a password | `/auth/v1/admin/users` (best-effort; see cutover notes) |
 
-reads (GET) pass through untouched — insforge stays the source of truth
-during development. bodies over `maxMirrorBodyBytes` are proxied but not
-mirrored (recorded as `skipped-too-large` so nothing disappears silently).
+reads (GET) pass through untouched: insforge stays the source of truth during
+development. bodies over `maxMirrorBodyBytes` are proxied but not mirrored
+(recorded as `skipped-too-large` so nothing disappears silently).
 
 every mirror op is written to an append-only ndjson journal
 (`.supaforge/journal.ndjson`), applied sequentially (write order is
 preserved) with bounded retries. anything that can't be applied parks as
-`failed` with the error — fix the blocker, run `replay`, done. binary upload
+`failed` with the error: fix the blocker, run `replay`, done. binary upload
 bodies go to sidecar files (`.supaforge/bodies/`) so the journal stays lean.
 
 ## setup
@@ -86,7 +93,7 @@ then point your agent's insforge base url at the bridge instead of insforge:
 - mcp: connect the mcp server through the bridge url
 
 everything that isn't recognized is proxied verbatim, so nothing breaks while
-you develop against insforge — you just get a parallel supabase copy for free.
+you develop against insforge. you just get a parallel supabase copy for free.
 
 ## daily commands
 
@@ -120,11 +127,11 @@ than pretending to work.
 ### not mirrored (port these manually)
 
 - realtime subscriptions and broadcasts
-- edge functions (deno) — supabase has equivalents, but code differs
+- edge functions (deno): supabase has equivalents, but code differs
 - model gateway calls (insforge-only concept)
-- real production users — mirrored dev users are best-effort; use supabase's
+- real production users: mirrored dev users are best-effort; use supabase's
   user-migration tooling for real accounts
-- rls policies arrive with mirrored sql, but verify them — jwt claim shapes
+- rls policies arrive with mirrored sql, but verify them: jwt claim shapes
   differ between the two platforms
 
 ## testing
@@ -135,8 +142,8 @@ npm test
 supaforge-bridge selftest
 ```
 
-the suite runs against in-process mock insforge and mock supabase servers —
-11 tests covering sql splitting, route classification, data mirroring,
+the suite runs against in-process mock insforge and mock supabase servers: 11
+tests covering sql splitting, route classification, data mirroring,
 migration capture, storage mirroring (direct + presigned-confirm), auth
 mirroring, failure/retry/replay, journal durability across restarts,
 cutover drift detection, and front-mode serving. no external services
