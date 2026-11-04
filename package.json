@@ -1,5 +1,5 @@
 {
-  "name": "getsupaforge",
+  "name": "supaforgecli",
   "version": "0.2.1",
   "description": "develop on insforge, mirror to supabase, cutover without copy-paste.",
   "type": "module",
