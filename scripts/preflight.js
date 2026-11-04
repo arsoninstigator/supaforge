@@ -101,22 +101,45 @@ try {
   warn("npm is not authenticated (npm login before publishing)");
 }
 
+// npm unpublish policy: a fully unpublished package blocks new publishes for
+// 24 hours, after which the NAME is reusable. used version numbers are spent
+// forever ("once package@version has been used, you can never use it again").
 try {
   const res = await fetch(`https://registry.npmjs.org/${pkg.name}`);
-  if (res.status === 404) ok(`name "${pkg.name}" is unclaimed on the registry`);
-  else if (res.status === 200) {
+  if (res.status === 404) {
+    ok(`name "${pkg.name}" is unclaimed on the registry`);
+  } else if (res.status === 200) {
     const doc = await res.json();
-    const versions = Object.keys(doc.versions || {});
-    const unpublished = doc.time && doc.time.unpublished;
-    if (unpublished && versions.length === 0) {
-      bad(`name "${pkg.name}" is a tombstone (fully unpublished ${unpublished.time}); pick a different name`);
+    const liveVersions = Object.keys(doc.versions || {});
+    const time = doc.time || {};
+    const burned = Object.keys(time).filter((k) => /^\d+\.\d+\.\d+/.test(k));
+    const unpublished = time.unpublished;
+
+    if (unpublished && liveVersions.length === 0) {
+      const hours = (Date.now() - Date.parse(unpublished.time)) / 36e5;
+      if (hours >= 24) {
+        ok(`name "${pkg.name}" is reusable (fully unpublished ${hours.toFixed(0)}h ago, past npm's 24h cooldown)`);
+      } else {
+        bad(`name "${pkg.name}" was unpublished ${hours.toFixed(1)}h ago; npm requires 24h before republishing`);
+      }
+      if (burned.length) {
+        warn(`spent version numbers (never reusable): ${burned.join(", ")}`);
+        if (burned.includes(pkg.version)) {
+          bad(`version ${pkg.version} was already used by the old package; bump to a fresh version`);
+        } else {
+          ok(`version ${pkg.version} has never been used, so it is free to publish`);
+        }
+      }
     } else if (doc["dist-tags"] && doc["dist-tags"].latest) {
-      warn(`name "${pkg.name}" already exists (latest ${doc["dist-tags"].latest}); this publish adds a version`);
+      const latest = doc["dist-tags"].latest;
+      if (liveVersions.includes(pkg.version)) {
+        bad(`version ${pkg.version} already exists on the registry; bump the version`);
+      } else {
+        warn(`name "${pkg.name}" is live (latest ${latest}); this publish adds ${pkg.version}`);
+      }
     } else {
       warn(`name "${pkg.name}" exists in an odd state; check before publishing`);
     }
-  } else if (res.status === 401) {
-    bad(`name "${pkg.name}" is blocked on the registry (401); pick a different name`);
   } else {
     warn(`registry answered ${res.status} for "${pkg.name}"`);
   }

@@ -1,6 +1,6 @@
 {
-  "name": "supaforge-bridge",
-  "version": "0.1.0",
+  "name": "supaforge",
+  "version": "0.2.0",
   "description": "develop on insforge, mirror to supabase, cutover without copy-paste.",
   "type": "module",
   "bin": {

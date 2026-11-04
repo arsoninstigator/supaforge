@@ -19,16 +19,19 @@ best of both worlds isn't a side effect, it's the design: insforge for the build
 ## install
 
 ```bash
-npm i -g supaforge-bridge     # gives you the `supaforge` command
+npm i -g supaforge            # the package and the command are both `supaforge`
 ```
 
 or without installing:
 
 ```bash
-npx supaforge-bridge start
+npx supaforge start
 ```
 
-the package is published as `supaforge-bridge` because the bare `supaforge` name is retired on npm (published and fully unpublished back in march, which permanently burns a name). the command itself is `supaforge`, everywhere.
+why the version starts at 0.2.0: the `supaforge` name was published and fully
+unpublished back in march 2026, which spends 0.1.0, 0.1.1, 0.1.3 and 0.1.4
+forever (npm never reissues a used version) but releases the name itself after
+a 24 hour cooldown. 0.2.0 is the first version this codebase owns.
 
 ## how it works
 
