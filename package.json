@@ -1,6 +1,6 @@
 {
-  "name": "@tinkrland/supaforge",
-  "version": "0.2.0",
+  "name": "getsupaforge",
+  "version": "0.2.1",
   "description": "develop on insforge, mirror to supabase, cutover without copy-paste.",
   "type": "module",
   "bin": {
@@ -40,8 +40,5 @@
     "url": "https://github.com/arsoninstigator/supaforge/issues"
   },
   "author": "arsoninstigator",
-  "license": "MIT",
-  "publishConfig": {
-    "access": "public"
-  }
+  "license": "MIT"
 }

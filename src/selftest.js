@@ -653,3 +653,24 @@ test("e2e: insforge realtime sql is held back from supabase replay", async () =>
     sbMock.server.close();
   }
 });
+
+test("cli: leading flag aliases and --version work", async () => {
+  const { execFileSync } = await import("node:child_process");
+  const cli = new URL("./cli.js", import.meta.url).pathname;
+  const { dir } = tmpJournalDir("cli");
+  const env = { ...process.env, SUPAFORGE_JOURNAL: path.join(dir, "journal.ndjson"), SUPAFORGE_STATE_DIR: dir };
+
+  const version = execFileSync(process.execPath, [cli, "--version"], { env, encoding: "utf8" }).trim();
+  const pkg = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+  assert.equal(version, pkg.version);
+
+  const statusFlag = execFileSync(process.execPath, [cli, "--status"], { env, encoding: "utf8" });
+  assert.match(statusFlag, /journal/);
+
+  const statusWord = execFileSync(process.execPath, [cli, "status"], { env, encoding: "utf8" });
+  assert.match(statusWord, /journal/);
+
+  const help = execFileSync(process.execPath, [cli, "--help"], { env, encoding: "utf8" });
+  assert.match(help, /supaforge start/);
+  assert.match(help, /--status/);
+});

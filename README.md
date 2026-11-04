@@ -19,22 +19,34 @@ best of both worlds isn't a side effect, it's the design: insforge for the build
 ## install
 
 ```bash
-npm i -g @tinkrland/supaforge     # installs the `supaforge` command
+npm i -g getsupaforge     # installs the `supaforge` command
 ```
 
 or without installing:
 
 ```bash
-npx @tinkrland/supaforge start
+npx getsupaforge start
 ```
 
-the command is `supaforge`, the package is scoped. two npm rules shaped that:
+then:
 
-1. `supaforge` was published and fully unpublished in march 2026, which spends
-   0.1.0, 0.1.1, 0.1.3 and 0.1.4 forever, so this starts at 0.2.0.
-2. the unscoped name is rejected outright (`403 package name too similar to
-   existing package supa-forge`), a typosquat guard that no republish can get
-   around. scoping keeps the exact name, and the binary is still `supaforge`.
+```bash
+supaforge --version
+supaforge start
+supaforge --status
+```
+
+every command answers as a subcommand or a leading flag (`supaforge status`
+and `supaforge --status` are the same thing).
+
+a note on the package name, since three npm rules shaped it:
+
+1. `supaforge` itself was published and fully unpublished in march 2026, which
+   spends 0.1.0, 0.1.1, 0.1.3 and 0.1.4 forever, and its unscoped name is
+   blocked by a typosquat guard against the live `supa-forge`.
+2. so the package is `getsupaforge`. the binary it installs is `supaforge`.
+3. `@tinkrland/supaforge` was the first scoped publish and is now deprecated
+   in favour of `getsupaforge`; its 0.2.0 is left in place and points here.
 
 ## how it works
 

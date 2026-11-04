@@ -21,7 +21,8 @@ usage:
                                           start the bridge (default: mirror mode on :7131)
                                           mirror: proxy insforge + mirror writes to supabase
                                           front:   serve insforge-shaped api from supabase
-  supaforge status                 journal stats + failed ops
+  supaforge status                 journal stats + failed ops (also --status)
+  supaforge --version              print the version
   supaforge replay                 retry failed mirror ops
   supaforge sql --file f.sql | --statement "SQL"
                                           run sql on both insforge and supabase
@@ -191,7 +192,7 @@ function packageVersion() {
 
 async function main() {
   const argv = process.argv.slice(2);
-  const cmd = argv[0];
+  let cmd = argv[0];
   const rest = argv.slice(1);
   if (cmd === "--version" || cmd === "-v" || cmd === "version") {
     console.log(packageVersion());
@@ -201,6 +202,19 @@ async function main() {
     console.log(usage());
     return;
   }
+  // every command also answers as a leading double-dash flag, so
+  // `supaforge --status` works the way people reach for it.
+  const FLAG_ALIASES = {
+    "--start": "start",
+    "--init": "init",
+    "--status": "status",
+    "--replay": "replay",
+    "--sql": "sql",
+    "--cutover-check": "cutover-check",
+    "--cutover": "cutover",
+    "--selftest": "selftest",
+  };
+  if (FLAG_ALIASES[cmd]) cmd = FLAG_ALIASES[cmd];
   const configPath = argValue(rest, "--config") || DEFAULT_CONFIG_FILENAME;
   const cfg = loadConfig(fs.existsSync(configPath) ? configPath : undefined);
 
