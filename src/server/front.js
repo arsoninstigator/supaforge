@@ -108,13 +108,13 @@ export function startFrontServer(cfg, { logger = () => {} } = {}) {
       }
 
       sendJson(res, 501, {
-        error: "supaforge-bridge front mode: this insforge endpoint is not translated yet",
+        error: "supaforge front mode: this insforge endpoint is not translated yet",
         hint: "data crud (records), object download, bucket list, and password auth are supported. other endpoints (realtime, functions, model gateway) must move to native supabase at cutover.",
         path: pathname,
       });
     } catch (err) {
       logger(`front error: ${err.message}`);
-      sendJson(res, 502, { error: "supaforge-bridge front upstream error", detail: String(err.message) });
+      sendJson(res, 502, { error: "supaforge front upstream error", detail: String(err.message) });
     }
   });
 

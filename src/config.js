@@ -56,7 +56,7 @@ function deepMerge(target, source) {
 
 export function writeConfigTemplate(configPath) {
   const template = {
-    $comment: "supaforge-bridge config. Env vars (INSFORGE_URL, SUPABASE_URL, ...) override these values.",
+    $comment: "supaforge config. Env vars (INSFORGE_URL, SUPABASE_URL, ...) override these values.",
     insforge: {
       baseUrl: "http://localhost:7130",
       adminKey: "your-insforge-admin-or-access-key",

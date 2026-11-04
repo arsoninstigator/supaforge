@@ -1,4 +1,4 @@
-// Built-in test suite for supaforge-bridge. Runs against in-process mock
+// Built-in test suite for supaforge. Runs against in-process mock
 // InsForge and mock Supabase servers — no external services, no deps.
 //
 //   node src/selftest.js
@@ -142,6 +142,8 @@ async function makeSupabaseMock() {
     objects: new Map(),
     users: [],
     buckets: [],
+    functions: [],
+    functionUpdates: [],
     failTables: [],
     restGetRows: [{ id: 1, title: "hello" }],
     schemaRows: [{ table_name: "posts", column_name: "id", data_type: "bigint", is_nullable: "NO" }],
@@ -190,6 +192,14 @@ async function makeSupabaseMock() {
       return sendJson(res, 200, { name: body?.name });
     }
     if (p === "/storage/v1/bucket" && req.method === "GET") return sendJson(res, 200, state.buckets);
+    if (p === "/v1/projects/testref/functions" && req.method === "POST") {
+      state.functions.push(body);
+      return sendJson(res, 201, { slug: body?.slug });
+    }
+    if (/^\/v1\/projects\/testref\/functions\/[^/]+$/.test(p) && req.method === "PATCH") {
+      state.functionUpdates.push(body);
+      return sendJson(res, 200, { slug: p.split("/").pop() });
+    }
     if (p === "/auth/v1/admin/users" && req.method === "POST") {
       state.users.push(body);
       return sendJson(res, 201, { id: `sb-${state.users.length}`, email: body?.email });
@@ -247,6 +257,8 @@ test("classify routes InsForge endpoints", () => {
   assert.equal(mk("POST", "/api/storage/buckets/avatars/objects/p.png/confirm-upload").kind, "storage-confirm");
   assert.equal(mk("POST", "/api/storage/buckets/avatars").kind, "storage-bucket");
   assert.equal(mk("POST", "/api/auth/users").kind, "auth-user");
+  assert.equal(mk("POST", "/api/functions").kind, "function-deploy");
+  assert.equal(mk("POST", "/api/functions/hello").slug, "hello");
   assert.equal(mk("GET", "/api/model/gateway/whatever").kind, "passthrough");
   const op = mirrorOpFor(mk("PATCH", "/api/database/records/posts?status=eq.draft"), { status: "archived" });
   assert.equal(op.type, "data-update");
@@ -554,4 +566,90 @@ test("journal stats report queue state", async () => {
   assert.equal(reloaded.failed().length, 1);
   assert.equal(reloaded.stats().done, 1);
   assert.equal(reloaded.stats().failed, 1);
+});
+
+test("e2e: edge function deploy mirrors to supabase functions api", async () => {
+  const ifMock = await makeInsforgeMock();
+  const sbMock = await makeSupabaseMock();
+  const { journalPath } = tmpJournalDir("fn");
+  const cfg = makeCfg(ifMock, sbMock, journalPath);
+  const journal = new Journal(cfg.bridge.journalPath);
+  journal.load();
+  const bridge = await startBridge(cfg, { journal, backoffMs: [1, 1] });
+
+  try {
+    const code = "Deno.serve(() => new Response(\"hi from insforge\"));";
+    await fetch(`http://127.0.0.1:${bridge.port}/api/functions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "hello", code }),
+    });
+    await until(() => sbMock.state.functions.length === 1, 5000, "function mirrored");
+    assert.equal(sbMock.state.functions[0].slug, "hello");
+    assert.equal(sbMock.state.functions[0].body, code);
+    assert.equal(sbMock.state.functions[0].verify_jwt, false);
+
+    // slug in the path, code nested in a function object
+    await fetch(`http://127.0.0.1:${bridge.port}/api/functions/second`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ function: { code: "Deno.serve(() => new Response(\"two\"));" } }),
+    });
+    await until(() => sbMock.state.functions.length === 2, 5000, "second function mirrored");
+    assert.equal(sbMock.state.functions[1].slug, "second");
+    await until(() => journal.done().length === 2, 5000, "function ops done");
+  } finally {
+    bridge.server.close();
+    ifMock.server.close();
+    sbMock.server.close();
+  }
+});
+
+test("e2e: insforge realtime sql is held back from supabase replay", async () => {
+  const ifMock = await makeInsforgeMock();
+  const sbMock = await makeSupabaseMock();
+  const { journalPath } = tmpJournalDir("realtime");
+  const cfg = makeCfg(ifMock, sbMock, journalPath);
+  const journal = new Journal(cfg.bridge.journalPath);
+  journal.load();
+  const bridge = await startBridge(cfg, { journal, backoffMs: [1, 1] });
+
+  try {
+    const sql = [
+      "create table public.orders (id bigint primary key, status text);",
+      "create or replace function public.notify_order_status() returns trigger as $$",
+      "begin",
+      "  perform realtime.publish('order:' || new.id::text, 'status_changed', jsonb_build_object('id', new.id));",
+      "  return new;",
+      "end; $$ language plpgsql security definer;",
+      "create trigger order_status_realtime after update of status on public.orders",
+      "for each row execute function public.notify_order_status();",
+      "alter table realtime.channels enable row level security;",
+    ].join("\n");
+
+    await fetch(`http://127.0.0.1:${bridge.port}/api/database/query`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ query: sql }),
+    });
+    await until(() => journal.done().length === 1, 5000, "sql op done");
+
+    const mgmt = sbMock.state.requests.filter((r) => r.path === "/v1/projects/testref/database/query");
+    assert.ok(mgmt.length >= 1, "supabase received the safe statements");
+    const replayed = mgmt.map((r) => String(r.body.query)).join("\n");
+    assert.match(replayed, /create table public\.orders/);
+    assert.doesNotMatch(replayed, /realtime\.publish/);
+    assert.doesNotMatch(replayed, /realtime\.channels/);
+    assert.doesNotMatch(replayed, /create trigger order_status_realtime/);
+
+    const skippedFile = path.join(cfg.bridge.stateDir, "skipped-realtime.sql");
+    assert.ok(fs.existsSync(skippedFile), "skipped statements are saved for porting");
+    const skipped = fs.readFileSync(skippedFile, "utf8");
+    assert.match(skipped, /realtime\.publish/);
+    assert.match(skipped, /create trigger order_status_realtime/);
+  } finally {
+    bridge.server.close();
+    ifMock.server.close();
+    sbMock.server.close();
+  }
 });

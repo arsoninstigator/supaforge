@@ -10,7 +10,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { classify, mirrorOpFor } from "./routes.js";
 import { MirrorQueue } from "../mirror/queue.js";
-import { applyMirrorOp } from "../mirror/apply.js";
+import { applyMirrorOp, setMirrorLogger } from "../mirror/apply.js";
 
 // Binary bodies (storage uploads) are written to a sidecar file so the
 // NDJSON journal stays small; mirror ops reference them via bodyPath.
@@ -27,6 +27,7 @@ function stashBinaryBody(cfg, op) {
 
 export function startBridge(cfg, opts = {}) {
   const { journal, logger = () => {}, onMirrored } = opts;
+  setMirrorLogger(logger);
   const insforgeUrl = new URL(cfg.insforge.baseUrl);
   const queue = new MirrorQueue(journal, (rec) => applyMirrorOp(cfg, rec), {
     logger,
@@ -44,7 +45,8 @@ export function startBridge(cfg, opts = {}) {
       isMutation &&
       (info.kind === "data" || info.kind === "sql" || info.kind === "auth-user" ||
         (info.kind === "storage-object" && (info.method === "PUT" || info.method === "POST")) ||
-        info.kind === "storage-bucket");
+        info.kind === "storage-bucket" ||
+        info.kind === "function-deploy");
     const cap = wantsBody ? cfg.bridge.maxMirrorBodyBytes : 0;
 
     const chunks = [];
@@ -69,7 +71,7 @@ export function startBridge(cfg, opts = {}) {
       if (!res.headersSent) {
         res.writeHead(502, { "content-type": "application/json" });
       }
-      res.end(JSON.stringify({ error: "supaforge-bridge: upstream InsForge unreachable", detail: String(err.message) }));
+      res.end(JSON.stringify({ error: "supaforge: upstream InsForge unreachable", detail: String(err.message) }));
     });
 
     req.on("data", (chunk) => {

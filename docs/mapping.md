@@ -1,4 +1,4 @@
-# supaforge-bridge mapping
+# supaforge mapping
 
 the complete, detailed translation map between insforge and supabase.
 source facts verified against the official docs on 2026-10-15:
@@ -29,7 +29,7 @@ the only divergence is the url shape and the auth envelope.
 | --- | --- | --- | --- |
 | migration apply (cli `db migrations up`) | http call into insforge's api carrying the sql | `POST api.supabase.com/v1/projects/{ref}/database/query` `{query}` | bridge captures the payload, scans it for sql (fields named sql/query/statements/content or any sql-looking string), splits statements, prefixes `set search_path to public;`, runs on supabase |
 | raw sql (cli `db query`) | `POST /api/database/query` (configurable via `insforge.sqlPath`) | same management api path | same capture-and-replay as above |
-| one-shot push | `supaforge-bridge sql -f file.sql` | same | applies to insforge first (source of truth), then supabase |
+| one-shot push | `supaforge sql -f file.sql` | same | applies to insforge first (source of truth), then supabase |
 
 sql splitting respects single/double quotes, dollar-quoted bodies
 (`$$ ... $$`, `$tag$ ... $tag$`), `--` line comments and `/* */` block
@@ -64,16 +64,36 @@ honest note: passwords mirrored this way land in supabase's auth system
 correctly, but real production users should be migrated with supabase's
 user-migration tooling at cutover, not by the bridge.
 
-## 5. not mirrored (by design)
+## 5. edge functions (mirror mode)
 
-- realtime subscriptions and broadcasts (insforge and supabase wire formats
-  differ; port at cutover)
-- edge functions (insforge deno functions vs supabase edge functions —
-  similar model, different deploy api)
-- model gateway calls (insforge-only product)
+| thing | insforge | supabase | translation |
+| --- | --- | --- | --- |
+| deploy / update function | `POST /api/functions`, `/api/functions/{slug}`, `/api/edge-functions` | management api `POST /v1/projects/{ref}/functions` `{slug, name, body, verify_jwt:false}`, falling back to `PATCH /functions/{slug}` on 409 | name read from path or payload; code read from `code`, `body`, `source`, `content`, nested `function.code`, or a `files` map (entrypoint preferred). multi-file payloads go to multipart `/functions/deploy?slug=` |
+
+cron schedules and database triggers attached to a function are separate
+metadata on both platforms and are not mirrored.
+
+## 6. realtime: deliberately not translated
+
+insforge realtime is socket.io over an explicit publish model:
+`realtime.publish(channel, event, payload)` called from a database trigger,
+with rls on `realtime.channels` / `realtime.messages`. supabase realtime is
+phoenix channels fed by the wal through a publication. no faithful automatic
+translation exists, so supaforge protects the migration instead:
+
+- any statement referencing the `realtime` schema (`publish`, `channels`,
+  `messages`, `channel_name`, `create schema realtime`) is held back from the
+  supabase replay, and so is any trigger that executes a held-back function
+- held-back sql is appended to `.supaforge/skipped-realtime.sql` for porting
+- the rest of the migration still applies, so realtime never blocks cutover
+
+## 7. not mirrored (by design)
+
+- model gateway calls (insforge-only product, no supabase counterpart): keep
+  using the openai-compatible client and point it at your provider in prod
 - read traffic of any kind
 
-## 6. front mode (after cutover, reverse direction)
+## 8. front mode (after cutover, reverse direction)
 
 serves the insforge-shaped api your app was written against, backed by
 supabase:
@@ -87,13 +107,13 @@ supabase:
 | `POST /api/auth/refresh` `{refresh_token}` | `POST /auth/v1/token?grant_type=refresh_token` | response reshaped likewise |
 | anything else | — | explicit 501 with a hint, never a silent fake |
 
-## 7. durability
+## 9. durability
 
 every mirror op is written to `.supaforge/journal.ndjson` (append-only,
 envelope field `evt`) before it is attempted, then applied sequentially so
 write order is preserved. ops retry up to 3 times with backoff; a hard 4xx
 fails immediately (retrying a 404 won't fix it), a 5xx or network error
 retries. terminal failures park as `failed` with the error text and are
-re-applied by `supaforge-bridge replay` after the blocker is fixed. binary
+re-applied by `supaforge replay` after the blocker is fixed. binary
 upload bodies live in `.supaforge/bodies/*.bin` sidecars referenced by
 `bodyPath`, keeping the journal lean.

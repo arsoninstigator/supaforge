@@ -99,15 +99,15 @@ function index(rows) {
 
 export function formatCutoverReport(report, pendingCount) {
   const lines = [];
-  lines.push("supaforge-bridge :: cutover check");
+  lines.push("supaforge :: cutover check");
   lines.push("=".repeat(40));
   lines.push(`insforge tables (${report.insforgeTables.length}): ${report.insforgeTables.join(", ") || "(none)"}`);
   lines.push(`supabase tables (${report.supabaseTables.length}): ${report.supabaseTables.join(", ") || "(none)"}`);
-  if (report.onlyInInsForge.length) lines.push(`\n[missing in supabase] ${report.onlyInInsForge.join(", ")} — run migrations or \`supaforge-bridge sql\` to sync them.`);
+  if (report.onlyInInsForge.length) lines.push(`\n[missing in supabase] ${report.onlyInInsForge.join(", ")} — run migrations or \`supaforge sql\` to sync them.`);
   if (report.onlyInSupabase.length) lines.push(`[extra in supabase] ${report.onlyInSupabase.join(", ")} — supabase has tables insforge doesn't; confirm they're intentional.`);
   for (const d of report.columnDiffs) lines.push(`[column] ${d}`);
   for (const d of report.countDiffs) lines.push(`[rows] ${d} (approx counts; pending mirror ops may explain this)`);
-  if (pendingCount > 0) lines.push(`\n[queue] ${pendingCount} mirror op(s) not yet applied — wait or run \`supaforge-bridge replay\`.`);
+  if (pendingCount > 0) lines.push(`\n[queue] ${pendingCount} mirror op(s) not yet applied — wait or run \`supaforge replay\`.`);
   lines.push("");
   lines.push(report.clean && pendingCount === 0
     ? "ok — insforge and supabase look in sync. safe to cutover."

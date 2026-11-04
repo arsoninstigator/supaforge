@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// supaforge-bridge cli
+// supaforge cli
 
 import fs from "node:fs";
 import path from "node:path";
@@ -9,24 +9,25 @@ import { startBridge } from "./server/proxy.js";
 import { startFrontServer } from "./server/front.js";
 import { cutoverCheck, formatCutoverReport } from "./cutover.js";
 import { jsonRequest } from "./util/http.js";
+import { readFileSync } from "node:fs";
 
 function usage() {
   return `
-supaforge-bridge — develop on insforge, mirror to supabase, cutover without copy-paste.
+supaforge — develop on insforge, mirror to supabase, cutover without copy-paste.
 
 usage:
-  supaforge-bridge init                    write a supaforge.config.json template
-  supaforge-bridge start [--mode mirror|front] [--port N]
+  supaforge init                    write a supaforge.config.json template
+  supaforge start [--mode mirror|front] [--port N]
                                           start the bridge (default: mirror mode on :7131)
                                           mirror: proxy insforge + mirror writes to supabase
                                           front:   serve insforge-shaped api from supabase
-  supaforge-bridge status                 journal stats + failed ops
-  supaforge-bridge replay                 retry failed mirror ops
-  supaforge-bridge sql --file f.sql | --statement "SQL"
+  supaforge status                 journal stats + failed ops
+  supaforge replay                 retry failed mirror ops
+  supaforge sql --file f.sql | --statement "SQL"
                                           run sql on both insforge and supabase
-  supaforge-bridge cutover-check          schema/row-count drift report
-  supaforge-bridge cutover                print the cutover checklist + write .env.cutover
-  supaforge-bridge selftest               run the built-in test suite (no external services)
+  supaforge cutover-check          schema/row-count drift report
+  supaforge cutover                print the cutover checklist + write .env.cutover
+  supaforge selftest               run the built-in test suite (no external services)
 
 env: INSFORGE_URL, INSFORGE_ADMIN_KEY, INSFORGE_SQL_PATH,
      SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_ACCESS_TOKEN,
@@ -35,7 +36,7 @@ env: INSFORGE_URL, INSFORGE_ADMIN_KEY, INSFORGE_SQL_PATH,
 }
 
 function fail(msg) {
-  console.error(`supaforge-bridge: ${msg}`);
+  console.error(`supaforge: ${msg}`);
   process.exit(1);
 }
 
@@ -54,7 +55,7 @@ async function cmdStart(args, cfg) {
     const missing = validateConfig(cfg, ["supabaseData"]);
     if (missing.length) fail(`missing config: ${missing.join(", ")}`);
     const { server, port } = await startFrontServer(cfg, { logger: (m) => console.log(`[front] ${m}`) });
-    console.log(`supaforge-bridge (front mode) listening on http://${cfg.bridge.host}:${port}`);
+    console.log(`supaforge (front mode) listening on http://${cfg.bridge.host}:${port}`);
     console.log(`serving insforge-shaped api from ${cfg.supabase.url}`);
     console.log("press ctrl+c to stop.");
     return () => server.close();
@@ -69,7 +70,7 @@ async function cmdStart(args, cfg) {
     logger: (m) => console.log(`[mirror] ${m}`),
   });
   const resumed = queue.resume();
-  console.log(`supaforge-bridge (mirror mode) listening on http://${cfg.bridge.host}:${port}`);
+  console.log(`supaforge (mirror mode) listening on http://${cfg.bridge.host}:${port}`);
   console.log(`forwarding to insforge at ${cfg.insforge.baseUrl}`);
   console.log(`mirroring writes to ${cfg.supabase.url}`);
   console.log(`journal: ${path.resolve(cfg.bridge.journalPath)}`);
@@ -81,7 +82,7 @@ async function cmdStart(args, cfg) {
 async function cmdStatus(cfg) {
   const journal = getJournal(cfg);
   const stats = journal.stats();
-  console.log("supaforge-bridge journal:", JSON.stringify(stats));
+  console.log("supaforge journal:", JSON.stringify(stats));
   const failed = journal.failed();
   if (failed.length) {
     console.log(`\n${failed.length} failed op(s):`);
@@ -89,7 +90,7 @@ async function cmdStatus(cfg) {
       console.log(`  #${op.seq} ${op.type} ${op.table || op.bucket || ""}: ${op.error || "unknown error"}`);
     }
     if (failed.length > 20) console.log(`  ... and ${failed.length - 20} more`);
-    console.log("\nfix the blocker, then run `supaforge-bridge replay`.");
+    console.log("\nfix the blocker, then run `supaforge replay`.");
   }
 }
 
@@ -123,7 +124,8 @@ async function cmdSql(args, cfg) {
   console.log("[insforge] ok");
 
   console.log("[supabase] running same sql via management api...");
-  const { applyMirrorOp } = await import("./mirror/apply.js");
+  const { applyMirrorOp, setMirrorLogger } = await import("./mirror/apply.js");
+  setMirrorLogger((m) => console.log(`[supabase] ${m}`));
   await applyMirrorOp(cfg, { type: "sql", sql });
   console.log("[supabase] ok — both sides in sync.");
 }
@@ -144,7 +146,7 @@ async function cmdCutoverCheck(cfg) {
 
 async function cmdCutover(cfg) {
   const env = [
-    "# written by supaforge-bridge cutover — values for running against supabase.",
+    "# written by supaforge cutover — values for running against supabase.",
     `SUPABASE_URL=${cfg.supabase.url}`,
     `SUPABASE_ANON_KEY=<your anon key from the supabase dashboard>`,
     `SUPABASE_SERVICE_ROLE_KEY=${cfg.supabase.serviceRoleKey ? "<present in bridge config>" : "<your service role key>"}`,
@@ -158,8 +160,8 @@ async function cmdCutover(cfg) {
   console.log(`wrote .env.cutover.`);
   console.log(`
 cutover checklist:
-  1. supaforge-bridge cutover-check   -> resolve any drift
-  2. stop the mirror bridge, restart it with: supaforge-bridge start --mode front
+  1. supaforge cutover-check   -> resolve any drift
+  2. stop the mirror bridge, restart it with: supaforge start --mode front
      (your app keeps speaking insforge-shaped api, now served by supabase)
   3. or switch the app to native supabase (base url + /rest/v1 paths) whenever ready.
   4. realtime, edge functions and the model gateway are not mirrored — port them manually.
@@ -178,10 +180,23 @@ function argFlag(args, flag) {
   return args.includes(flag);
 }
 
+function packageVersion() {
+  try {
+    const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+    return pkg.version;
+  } catch {
+    return "0.0.0";
+  }
+}
+
 async function main() {
   const argv = process.argv.slice(2);
   const cmd = argv[0];
   const rest = argv.slice(1);
+  if (cmd === "--version" || cmd === "-v" || cmd === "version") {
+    console.log(packageVersion());
+    return;
+  }
   if (!cmd || cmd === "--help" || cmd === "-h") {
     console.log(usage());
     return;
@@ -195,7 +210,7 @@ async function main() {
         fail(`${configPath} already exists (use --force to overwrite)`);
       }
       writeConfigTemplate(configPath);
-      console.log(`wrote ${configPath} — fill in your keys, or set the env vars listed in \`supaforge-bridge --help\`.`);
+      console.log(`wrote ${configPath} — fill in your keys, or set the env vars listed in \`supaforge --help\`.`);
       break;
     case "start": {
       const close = await cmdStart(rest, cfg);

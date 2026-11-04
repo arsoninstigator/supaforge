@@ -7,8 +7,12 @@
 // and auth headers change.
 
 import fs from "node:fs";
+import path from "node:path";
 import { jsonRequest, request } from "../util/http.js";
 import { splitSql, extractSqlCandidates } from "../util/sqlsplit.js";
+
+let log = () => {};
+export function setMirrorLogger(fn) { log = fn; }
 
 function supaHeaders(cfg, extra = {}) {
   return {
@@ -68,9 +72,47 @@ async function runSqlOnSupabase(cfg, query) {
   }
 }
 
+// insforge realtime lives in a `realtime` schema that supabase does not have:
+// triggers call realtime.publish(), policies target realtime.channels, and
+// helpers like realtime.channel_name() resolve there. replaying those to
+// supabase would fail the whole migration, so they are held back, written to
+// .supaforge/skipped-realtime.sql for porting, and reported.
+const REALTIME_SQL_RE = /\brealtime\.(publish|channels|messages|channel_name)\b|create\s+schema\s+(if\s+not\s+exists\s+)?realtime\b/i;
+const CREATE_FN_RE = /create\s+(?:or\s+replace\s+)?function\s+([\w.]+)/i;
+const TRIGGER_FN_RE = /execute\s+(?:function|procedure)\s+([\w.]+)/i;
+
+function planSqlForSupabase(statements) {
+  const blocked = [];
+  const blockedFunctions = new Set();
+  for (const stmt of statements) {
+    if (REALTIME_SQL_RE.test(stmt)) {
+      blocked.push(stmt);
+      const m = stmt.match(CREATE_FN_RE);
+      if (m) blockedFunctions.add(m[1].replace(/^public\./i, "").toLowerCase());
+    }
+  }
+  const runnable = statements.filter((stmt) => {
+    if (blocked.includes(stmt)) return false;
+    const m = stmt.match(TRIGGER_FN_RE);
+    if (m && blockedFunctions.has(m[1].replace(/^public\./i, "").toLowerCase())) {
+      blocked.push(stmt); // trigger would reference a function we did not create
+      return false;
+    }
+    return true;
+  });
+  return { runnable, blocked };
+}
+
+function recordSkippedRealtime(cfg, blocked) {
+  const dir = (cfg.bridge && cfg.bridge.stateDir) || ".supaforge";
+  const file = path.join(dir, "skipped-realtime.sql");
+  fs.mkdirSync(dir, { recursive: true });
+  const banner = `-- held back from supabase replay at ${new Date().toISOString()}\n-- insforge realtime schema has no supabase counterpart; port these to supabase realtime channels + publication.\n\n`;
+  fs.appendFileSync(file, banner + blocked.join(";\n\n") + ";\n\n");
+  return file;
+}
+
 async function mirrorSql(cfg, rec) {
-  // `rec.sql` is used by the `supaforge-bridge sql` command; `rec.body` is a
-  // captured CLI/MCP payload of unknown shape — scan it for SQL strings.
   const scripts = rec.sql ? [rec.sql] : extractSqlCandidates(rec.body);
   if (scripts.length === 0) {
     throw new Error("no SQL found in payload to mirror");
@@ -78,7 +120,13 @@ async function mirrorSql(cfg, rec) {
   for (const script of scripts) {
     const statements = splitSql(script);
     if (statements.length === 0) continue;
-    await runSqlOnSupabase(cfg, statements.join(";\n") + ";");
+    const { runnable, blocked } = planSqlForSupabase(statements);
+    if (blocked.length > 0) {
+      const file = recordSkippedRealtime(cfg, blocked);
+      log(`realtime: held back ${blocked.length} insforge realtime statement(s) from supabase; saved to ${file}`);
+    }
+    if (runnable.length === 0) continue;
+    await runSqlOnSupabase(cfg, runnable.join(";\n") + ";");
   }
 }
 
@@ -171,6 +219,76 @@ async function mirrorObjectDelete(cfg, rec) {
   await res.text().catch(() => {});
 }
 
+// ---------- edge functions (deno -> supabase edge functions) ----------
+
+function pickFunctionMeta(rec) {
+  const b = rec.body && typeof rec.body === "object" ? rec.body : {};
+  const inner = b.function && typeof b.function === "object" ? b.function : {};
+  const slug = rec.slug || b.slug || b.name || b.functionName || inner.slug || inner.name;
+  let code = b.code || b.body || b.source || b.sourceCode || b.content || inner.code;
+  const files = b.files || inner.files || null;
+  if (!code && files) {
+    if (Array.isArray(files)) {
+      const entry = files.find((f) => /index\.[tj]sx?$/.test(f.name || f.path || "")) || files[0];
+      code = entry && (entry.content || entry.source);
+    } else if (typeof files === "object") {
+      const key = Object.keys(files).find((k) => /index\.[tj]sx?$/.test(k)) || Object.keys(files)[0];
+      code = files[key];
+    }
+  }
+  if (!code && typeof rec.body === "string") code = rec.body;
+  return { slug, code, files };
+}
+
+async function mirrorFunctionDeploy(cfg, rec) {
+  const { slug, code, files } = pickFunctionMeta(rec);
+  if (!slug) throw new Error("function mirror: no function name/slug in deploy payload");
+  if (!code && !files) throw new Error(`function mirror: no source found for "${slug}"`);
+  const headers = { authorization: `Bearer ${cfg.supabase.accessToken}` };
+
+  // single-file: management api accepts json {slug, name, body, verify_jwt}
+  if (typeof code === "string") {
+    const res = await request("POST", mgmtUrl(cfg, "/functions"), {
+      headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify({ slug, name: slug, body: code, verify_jwt: false }),
+    });
+    if (res.ok) { await res.text().catch(() => {}); return; }
+    if (res.status === 409) {
+      const patch = await request("PATCH", mgmtUrl(cfg, `/functions/${encodeURIComponent(slug)}`), {
+        headers: { ...headers, "content-type": "application/json" },
+        body: JSON.stringify({ body: code, verify_jwt: false }),
+      });
+      if (patch.ok) { await patch.text().catch(() => {}); return; }
+      const err = new Error(`supabase function update -> ${patch.status}: ${(await patch.text()).slice(0, 300)}`);
+      err.status = patch.status;
+      throw err;
+    }
+    const err = new Error(`supabase function create -> ${res.status}: ${(await res.text()).slice(0, 300)}`);
+    err.status = res.status;
+    throw err;
+  }
+
+  // multi-file: multipart deploy, the shape supabase cli uses
+  const form = new FormData();
+  const entries = Array.isArray(files)
+    ? files.map((f) => [f.name || f.path, f.content ?? f.source])
+    : Object.entries(files);
+  for (const [name, content] of entries) {
+    form.append("file", new Blob([String(content ?? "")], { type: "application/typescript" }), name);
+  }
+  form.append("metadata", JSON.stringify({ entrypoint_path: entries[0][0], name: slug, verify_jwt: false }));
+  const res = await request("POST", mgmtUrl(cfg, `/functions/deploy?slug=${encodeURIComponent(slug)}`), {
+    headers,
+    body: form,
+  });
+  if (!res.ok) {
+    const err = new Error(`supabase function deploy -> ${res.status}: ${(await res.text()).slice(0, 300)}`);
+    err.status = res.status;
+    throw err;
+  }
+  await res.text().catch(() => {});
+}
+
 export async function applyMirrorOp(cfg, rec) {
   switch (rec.type) {
     case "data-insert":
@@ -181,6 +299,8 @@ export async function applyMirrorOp(cfg, rec) {
       return mirrorSql(cfg, rec);
     case "auth-user":
       return mirrorAuthUser(cfg, rec);
+    case "function-deploy":
+      return mirrorFunctionDeploy(cfg, rec);
     case "bucket-create":
       return mirrorBucketCreate(cfg, rec);
     case "bucket-delete":

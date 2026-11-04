@@ -1,4 +1,4 @@
-// supaforge-bridge — shared helpers: HTTP with timeouts + JSON convenience.
+// supaforge — shared helpers: HTTP with timeouts + JSON convenience.
 
 const DEFAULT_TIMEOUT_MS = 30000;
 

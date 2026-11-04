@@ -1,6 +1,6 @@
 // Mirror queue: applies mirror ops to Supabase serially (preserving write
 // order) with bounded retries, and parks stubborn failures in the journal
-// for `supaforge-bridge replay` once the blocker is fixed.
+// for `supaforge replay` once the blocker is fixed.
 
 import { sleep } from "../util/http.js";
 

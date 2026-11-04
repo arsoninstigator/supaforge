@@ -15,6 +15,10 @@ const BUCKETS_ADMIN_RE = /^\/api\/storage\/buckets\/?([^/]*)$/;
 // InsForge auth paths worth mirroring.
 const AUTH_USERS_RE = /^\/api\/auth\/users\/?$/;
 
+// InsForge edge function deploys. The CLI and MCP use slightly different
+// paths across versions, and some carry the slug in the path.
+const FUNCTION_DEPLOY_RE = /^\/api\/(?:functions|edge-functions|deno-functions)(?:\/([^/?]+))?\/?$/;
+
 export function classify(req) {
   const url = new URL(req.url, "http://bridge.local");
   const pathname = decodeURIComponent(url.pathname);
@@ -49,6 +53,12 @@ export function classify(req) {
     info.kind = "auth-user";
     return info;
   }
+  const fn = pathname.match(FUNCTION_DEPLOY_RE);
+  if (fn && (method === "POST" || method === "PUT" || method === "PATCH")) {
+    info.kind = "function-deploy";
+    info.slug = fn[1] || null;
+    return info;
+  }
   return info;
 }
 
@@ -77,6 +87,8 @@ export function mirrorOpFor(info, body) {
       return { type: "object-upload-confirm", bucket: info.bucket, key: info.key };
     case "auth-user":
       return { type: "auth-user", body };
+    case "function-deploy":
+      return { type: "function-deploy", slug: info.slug, body };
     default:
       return null;
   }
