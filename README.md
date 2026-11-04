@@ -47,6 +47,9 @@ a note on the package name, since three npm rules shaped it:
 2. so the package is `getsupaforge`. the binary it installs is `supaforge`.
 3. `@tinkrland/supaforge` was the first scoped publish and is now deprecated
    in favour of `getsupaforge`; its 0.2.0 is left in place and points here.
+4. `supaforgecli` was published too while the name was being settled, then
+   deprecated, so there is exactly one install path. flip the two deprecation
+   messages if you would rather that name be canonical.
 
 ## how it works
 
