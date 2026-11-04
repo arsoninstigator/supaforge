@@ -19,19 +19,22 @@ best of both worlds isn't a side effect, it's the design: insforge for the build
 ## install
 
 ```bash
-npm i -g supaforge            # the package and the command are both `supaforge`
+npm i -g @tinkrland/supaforge     # installs the `supaforge` command
 ```
 
 or without installing:
 
 ```bash
-npx supaforge start
+npx @tinkrland/supaforge start
 ```
 
-why the version starts at 0.2.0: the `supaforge` name was published and fully
-unpublished back in march 2026, which spends 0.1.0, 0.1.1, 0.1.3 and 0.1.4
-forever (npm never reissues a used version) but releases the name itself after
-a 24 hour cooldown. 0.2.0 is the first version this codebase owns.
+the command is `supaforge`, the package is scoped. two npm rules shaped that:
+
+1. `supaforge` was published and fully unpublished in march 2026, which spends
+   0.1.0, 0.1.1, 0.1.3 and 0.1.4 forever, so this starts at 0.2.0.
+2. the unscoped name is rejected outright (`403 package name too similar to
+   existing package supa-forge`), a typosquat guard that no republish can get
+   around. scoping keeps the exact name, and the binary is still `supaforge`.
 
 ## how it works
 
